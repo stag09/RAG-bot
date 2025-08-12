@@ -1,0 +1,6 @@
+streamlit
+PyPDF2
+cohere
+faiss-cpu
+numpy
+python-dotenv
