@@ -34,12 +34,6 @@ st.markdown("""
         border: 1px solid #cbd5e0;
         margin-bottom: 10px;
     }
-    .chunk-box {
-        background: #f7fafc;
-        padding: 8px;
-        border-left: 4px solid #2b6cb0;
-        margin-bottom: 8px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,29 +43,32 @@ COHERE_API_KEY = "j1fYvGNB4oiaPleuLLtLPp24tLgqgFhqI4BeAqEj"
 def get_cohere_client():
     return cohere.Client(COHERE_API_KEY)
 
-# Load PDF
+# Load PDF with page numbers
 def load_pdf(file):
     pdf = PdfReader(file)
-    text = ""
-    for page in pdf.pages:
+    pages = []
+    for i, page in enumerate(pdf.pages):
         page_text = page.extract_text()
         if page_text:
-            text += page_text + "\n"
-    return text
+            pages.append({"page": i + 1, "text": page_text})
+    return pages
 
-# Load TXT
+# Load TXT (no pages, treat as single page)
 def load_txt(file):
-    return file.read().decode("utf-8")
+    text = file.read().decode("utf-8")
+    return [{"page": 1, "text": text}]
 
-# Chunk text
-def chunk_text(text, chunk_size=500, overlap=50):
-    words = text.split()
+# Chunk text while keeping page numbers
+def chunk_text(pages, chunk_size=500, overlap=50):
     chunks = []
-    i = 0
-    while i < len(words):
-        chunk = words[i:i + chunk_size]
-        chunks.append(" ".join(chunk))
-        i += chunk_size - overlap
+    for page in pages:
+        words = page["text"].split()
+        i = 0
+        while i < len(words):
+            chunk_words = words[i:i + chunk_size]
+            chunk_text = " ".join(chunk_words)
+            chunks.append({"page": page["page"], "text": chunk_text})
+            i += chunk_size - overlap
     return chunks
 
 # Embed text with Cohere → return NumPy array
@@ -82,7 +79,7 @@ def embed_texts(co, texts):
     response = co.embed(
         texts=texts,
         model="embed-english-v3.0",
-        input_type="search_document"   
+        input_type="search_document"
     )
     embeddings = np.array(response.embeddings, dtype=np.float32)
     return embeddings
@@ -100,9 +97,9 @@ def build_faiss_index(embeddings):
 def generate_answer(co, context_chunks, question,
                     model="command-r-plus",
                     temperature=0.3):
-    context = "\n\n".join(context_chunks)
+    context = "\n\n".join([c["text"] for c in context_chunks])
     prompt = (
-        f"You are a helpful assistant. Use the provided context to answer accurately.,i want proved page.no also while iam asking the question \n\n"
+        f"You are a helpful assistant. Use the provided context to answer accurately.\n\n"
         f"Context:\n{context}\n\n"
         f"Question: {question}"
     )
@@ -115,25 +112,26 @@ def generate_answer(co, context_chunks, question,
 
 # Main App
 def main():
-    st.title("📚 RAG Chatbot")
+    st.title("📚 RAG Chatbot with Page Numbers")
 
     co = get_cohere_client()
 
     uploaded_file = st.file_uploader("📤 Upload PDF or TXT", type=["pdf", "txt"])
     if uploaded_file:
         if uploaded_file.type == "application/pdf":
-            text = load_pdf(uploaded_file)
+            pages = load_pdf(uploaded_file)
         else:
-            text = load_txt(uploaded_file)
+            pages = load_txt(uploaded_file)
 
-        st.markdown(f'<div class="stat-box">📄 Document Loaded: <b>{len(text)} characters</b></div>', unsafe_allow_html=True)
+        total_text = sum(len(p["text"]) for p in pages)
+        st.markdown(f'<div class="stat-box">📄 Document Loaded: <b>{total_text} characters</b></div>', unsafe_allow_html=True)
 
-        chunks = chunk_text(text)
+        chunks = chunk_text(pages)
         st.markdown(f'<div class="stat-box">✂️ Split into <b>{len(chunks)}</b> chunks</div>', unsafe_allow_html=True)
 
         # Create embeddings
         with st.spinner("⚡ Creating embeddings..."):
-            embeddings = embed_texts(co, chunks)
+            embeddings = embed_texts(co, [c["text"] for c in chunks])
 
         if embeddings.size == 0:
             st.error("❌ No text found to embed. Please upload a valid file.")
@@ -156,30 +154,31 @@ def main():
     # Query
     query = st.text_input("🔍 Enter your query")
     if query and 'index' in st.session_state:
-         with st.spinner("🔎 Searching..."):
+        with st.spinner("🔎 Searching..."):
             q_embedding = embed_texts(st.session_state['co'], [query])
             if q_embedding.size == 0:
                 st.error("❌ Query embedding failed.")
             else:
                 D, I = st.session_state['index'].search(q_embedding, k=3)
 
-            # Collect relevant chunks (used internally only)
+                # Collect relevant chunks with page info
                 relevant_chunks = []
                 for idx in I[0]:
                     if 0 <= idx < len(st.session_state['chunks']):
                         relevant_chunks.append(st.session_state['chunks'][idx])
 
-            # Generate answer
-            answer = generate_answer(
-                st.session_state['co'],
-                relevant_chunks,
-                query
-            )
+                # Generate answer
+                answer = generate_answer(
+                    st.session_state['co'],
+                    relevant_chunks,
+                    query
+                )
 
-            # Show only the final answer
-            st.success("✅ Answer generated:")
-            st.write(answer)
-
+                # Show answer + pages
+                pages_used = [c["page"] for c in relevant_chunks]
+                st.success("✅ Answer generated:")
+                st.write(answer)
+                st.info(f"📄 Found on page(s): {sorted(set(pages_used))}")
 
 if __name__ == "__main__":
     main()
