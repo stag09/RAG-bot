@@ -39,6 +39,7 @@ st.markdown("""
 
 # Initialize Cohere client
 COHERE_API_KEY = "j1fYvGNB4oiaPleuLLtLPp24tLgqgFhqI4BeAqEj"
+
 @st.cache_resource
 def get_cohere_client():
     return cohere.Client(COHERE_API_KEY)
@@ -129,7 +130,7 @@ def main():
         chunks = chunk_text(pages)
         st.markdown(f'<div class="stat-box">✂️ Split into <b>{len(chunks)}</b> chunks</div>', unsafe_allow_html=True)
 
-        # Create embeddings
+        # Create embeddings for the entire document (optional)
         with st.spinner("⚡ Creating embeddings..."):
             embeddings = embed_texts(co, [c["text"] for c in chunks])
 
@@ -139,46 +140,51 @@ def main():
 
         st.success("✅ Embeddings created successfully")
 
-        # Build FAISS index
-        index = build_faiss_index(embeddings)
-        if index is None:
-            st.error("❌ Failed to build FAISS index.")
-            return
-
         # Save to session
         st.session_state['chunks'] = chunks
-        st.session_state['index'] = index
-        st.session_state['embeddings'] = embeddings
         st.session_state['co'] = co
 
-    # Query
-    query = st.text_input("🔍 Enter your query")
-    if query and 'index' in st.session_state:
-        with st.spinner("🔎 Searching..."):
-            q_embedding = embed_texts(st.session_state['co'], [query])
-            if q_embedding.size == 0:
-                st.error("❌ Query embedding failed.")
+    # Query Section
+    if 'chunks' in st.session_state:
+        page_numbers = sorted(set(c["page"] for c in st.session_state['chunks']))
+        selected_page = st.number_input(
+            "📄 Enter page number to search",
+            min_value=min(page_numbers),
+            max_value=max(page_numbers),
+            value=min(page_numbers)
+        )
+
+        query = st.text_input("🔍 Enter your query")
+        
+        if query:
+            # Filter chunks for selected page
+            chunks_on_page = [c for c in st.session_state['chunks'] if c["page"] == selected_page]
+
+            if not chunks_on_page:
+                st.error(f"❌ No content found on page {selected_page}.")
             else:
-                D, I = st.session_state['index'].search(q_embedding, k=3)
+                # Embed only the chunks on that page
+                embeddings_page = embed_texts(st.session_state['co'], [c["text"] for c in chunks_on_page])
+                index_page = build_faiss_index(embeddings_page)
 
-                # Collect relevant chunks with page info
-                relevant_chunks = []
-                for idx in I[0]:
-                    if 0 <= idx < len(st.session_state['chunks']):
-                        relevant_chunks.append(st.session_state['chunks'][idx])
+                # Embed query
+                q_embedding = embed_texts(st.session_state['co'], [query])
+                if q_embedding.size == 0:
+                    st.error("❌ Query embedding failed.")
+                else:
+                    # Search only within this page
+                    D, I = index_page.search(q_embedding, k=min(3, len(chunks_on_page)))
 
-                # Generate answer
-                answer = generate_answer(
-                    st.session_state['co'],
-                    relevant_chunks,
-                    query
-                )
+                    # Collect relevant chunks
+                    relevant_chunks = [chunks_on_page[idx] for idx in I[0] if 0 <= idx < len(chunks_on_page)]
 
-                # Show answer + pages
-                pages_used = [c["page"] for c in relevant_chunks]
-                st.success("✅ Answer generated:")
-                st.write(answer)
-                st.info(f"📄 Found on page(s): {sorted(set(pages_used))}")
+                    # Generate answer
+                    answer = generate_answer(st.session_state['co'], relevant_chunks, query)
+
+                    # Show answer + page
+                    st.success("✅ Answer generated:")
+                    st.write(answer)
+                    st.info(f"📄 Page: {selected_page}")
 
 if __name__ == "__main__":
     main()
