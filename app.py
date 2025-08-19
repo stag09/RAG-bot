@@ -102,7 +102,7 @@ def generate_answer(co, context_chunks, question,
                     temperature=0.3):
     context = "\n\n".join(context_chunks)
     prompt = (
-        f"You are a helpful assistant. Use the provided context to answer accurately.,i want proved page.no also\n\n"
+        f"You are a helpful assistant. Use the provided context to answer accurately.,i want proved page.no also give me \n\n"
         f"Context:\n{context}\n\n"
         f"Question: {question}"
     )
