@@ -37,6 +37,13 @@ st.markdown("""
         border: 1px solid #cbd5e0;
         margin-bottom: 10px;
     }
+    .source-box {
+        background: #f7fafc;
+        padding: 10px;
+        border-left: 4px solid #2b6cb0;
+        margin-bottom: 10px;
+        font-size: 14px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,7 +81,7 @@ def chunk_text(pages, chunk_size=500, overlap=50):
             i += chunk_size - overlap
     return chunks
 
-# Embed text with Cohere → return NumPy array (with batching + retry)
+# Embed text with Cohere → return NumPy array (with batching + silent retry)
 def embed_texts(co, texts, batch_size=32, max_retries=5):
     texts = [t for t in texts if t and t.strip()]
     if not texts:
@@ -93,11 +100,9 @@ def embed_texts(co, texts, batch_size=32, max_retries=5):
                 )
                 embeddings.extend(response.embeddings)
                 break  # ✅ success → go to next batch
-
             except TooManyRequestsError:
                 wait = (2 ** attempt) + random.random()
-                st.warning(f"⚠️ Rate limit hit. Retrying in {wait:.2f}s...")
-                time.sleep(wait)
+                time.sleep(wait)  # silent retry (no warning)
 
     return np.array(embeddings, dtype=np.float32)
 
@@ -191,11 +196,17 @@ def main():
                     query
                 )
 
-                # Show answer + pages
-                pages_used = [c["page"] for c in relevant_chunks]
+                # Show answer
                 st.success("✅ Answer generated:")
                 st.write(answer)
-                st.info(f"📄 Found on page(s): {sorted(set(pages_used))}")
+
+                # Show sources with exact text + page numbers
+                st.markdown("### 📖 Sources")
+                for c in relevant_chunks:
+                    st.markdown(
+                        f'<div class="source-box"><b>Page {c["page"]}</b><br>{c["text"]}</div>',
+                        unsafe_allow_html=True
+                    )
 
 if __name__ == "__main__":
     main()
