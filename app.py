@@ -134,7 +134,7 @@ def generate_answer(co, context_chunks, question,
 
 # Main App
 def main():
-    st.title("📚 RAG Chatbot with Page Numbers")
+    st.title("📚 PDF TXT Reader")
 
     co = get_cohere_client()
 
