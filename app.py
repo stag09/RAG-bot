@@ -3,6 +3,9 @@ from PyPDF2 import PdfReader
 import cohere
 import numpy as np
 import faiss
+import time
+import random
+from cohere.errors import TooManyRequestsError
 
 # ========== CUSTOM CSS ==========
 st.markdown("""
@@ -71,18 +74,32 @@ def chunk_text(pages, chunk_size=500, overlap=50):
             i += chunk_size - overlap
     return chunks
 
-# Embed text with Cohere → return NumPy array
-def embed_texts(co, texts):
+# Embed text with Cohere → return NumPy array (with batching + retry)
+def embed_texts(co, texts, batch_size=32, max_retries=5):
     texts = [t for t in texts if t and t.strip()]
     if not texts:
         return np.array([], dtype=np.float32)
-    response = co.embed(
-        texts=texts,
-        model="embed-english-v3.0",
-        input_type="search_document"
-    )
-    embeddings = np.array(response.embeddings, dtype=np.float32)
-    return embeddings
+
+    embeddings = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i+batch_size]
+
+        for attempt in range(max_retries):
+            try:
+                response = co.embed(
+                    texts=batch,
+                    model="embed-english-v3.0",
+                    input_type="search_document"
+                )
+                embeddings.extend(response.embeddings)
+                break  # ✅ success → go to next batch
+
+            except TooManyRequestsError:
+                wait = (2 ** attempt) + random.random()
+                st.warning(f"⚠️ Rate limit hit. Retrying in {wait:.2f}s...")
+                time.sleep(wait)
+
+    return np.array(embeddings, dtype=np.float32)
 
 # Build FAISS index
 def build_faiss_index(embeddings):
@@ -155,7 +172,7 @@ def main():
     query = st.text_input("🔍 Enter your query")
     if query and 'index' in st.session_state:
         with st.spinner("🔎 Searching..."):
-            q_embedding = embed_texts(st.session_state['co'], [query])
+            q_embedding = embed_texts(st.session_state['co'], [query])  # ✅ safe embedding
             if q_embedding.size == 0:
                 st.error("❌ Query embedding failed.")
             else:
